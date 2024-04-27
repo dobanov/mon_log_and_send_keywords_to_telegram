@@ -1,4 +1,4 @@
-Send lines from log file to telegram chat/bot
+This programm sends lines that contain keyword(s) from log file to telegram chat/bot
 
 Options:
   --filename   Path to the log file
