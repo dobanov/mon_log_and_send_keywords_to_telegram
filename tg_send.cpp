@@ -6,9 +6,10 @@
 #include <chrono>
 #include <thread>
 #include <curl/curl.h>
-#include <sys/stat.h>
+#include <filesystem>
 
-std::vector<std::string> split(const std::string &s, char delimiter) {
+// Функция для разделения строки на подстроки по заданному разделителю
+std::vector<std::string> split(const std::string& s, char delimiter) {
     std::vector<std::string> tokens;
     std::string token;
     std::istringstream tokenStream(s);
@@ -18,11 +19,13 @@ std::vector<std::string> split(const std::string &s, char delimiter) {
     return tokens;
 }
 
+// Функция обратного вызова для записи данных CURL
 size_t writeCallback(char* contents, size_t size, size_t nmemb, void* userp) {
     return size * nmemb;
 }
 
-void sendToTelegram(std::string botId, std::string chatId, std::string message) {
+// Функция для отправки сообщения в Telegram
+void sendToTelegram(const std::string& botId, const std::string& chatId, const std::string& message) {
     CURL* curl = curl_easy_init();
     if (curl) {
         std::string url = "https://api.telegram.org/bot" + botId + "/sendMessage";
@@ -35,6 +38,7 @@ void sendToTelegram(std::string botId, std::string chatId, std::string message) 
     }
 }
 
+// Функция для вывода информации о использовании программы
 void printUsage(const std::string& programName) {
     std::cerr << "Usage: " << programName << " --filename <filename> --keyword <keyword1> <keyword2> ... <keywordN> --n <n> --bot-id <bot_id> --chat-id <chat_id> [--debug]" << std::endl;
     std::cerr << "Options:" << std::endl;
@@ -46,28 +50,8 @@ void printUsage(const std::string& programName) {
     std::cerr << "  --debug      Enable debug mode (optional)" << std::endl;
 }
 
-bool isTextFile(const std::string& filename) {
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        return false;
-    }
-
-    char c;
-    while (file.get(c)) {
-        if (c == '\0') {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool fileExists(const std::string& filename) {
-    struct stat buffer;
-    return (stat(filename.c_str(), &buffer) == 0);
-}
-
 int main(int argc, char* argv[]) {
+    // Проверка наличия аргументов командной строки
     if (argc < 2 || std::string(argv[1]) == "--help") {
         printUsage(argv[0]);
         return 1;
@@ -80,12 +64,13 @@ int main(int argc, char* argv[]) {
     std::string chatId;
     bool debug = false;
 
+    // Парсинг аргументов командной строки
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--filename") {
             filename = argv[++i];
         } else if (arg == "--keyword") {
-            while (i + 1 < argc && argv[i + 1][0] != '-' ) {
+            while (i + 1 < argc && argv[i + 1][0] != '-') {
                 keywords.push_back(argv[++i]);
             }
         } else if (arg == "--n") {
@@ -99,19 +84,21 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Проверка наличия всех необходимых аргументов
     if (filename.empty() || keywords.empty() || n == 0 || botId.empty() || chatId.empty()) {
         std::cerr << "Missing arguments!" << std::endl;
         printUsage(argv[0]);
         return 1;
     }
 
-    if (!fileExists(filename)) {
+    // Проверка существования и типа файла
+    if (!std::filesystem::exists(filename)) {
         std::cerr << "Error: " << filename << " does not exist." << std::endl;
         return 1;
     }
 
-    if (!isTextFile(filename)) {
-        std::cerr << "Error: " << filename << " is not a text file." << std::endl;
+    if (!std::filesystem::is_regular_file(filename)) {
+        std::cerr << "Error: " << filename << " is not a regular file." << std::endl;
         return 1;
     }
 
@@ -119,8 +106,9 @@ int main(int argc, char* argv[]) {
     std::string line;
     std::streampos lastPos;
 
+    // Бесконечный цикл мониторинга файла
     while (true) {
-        if (!file.is_open() || !file.good() || !isTextFile(filename)) {
+        if (!file.is_open() || !file.good() || !std::filesystem::is_regular_file(filename)) {
             file.close();
             file.clear();
             file.open(filename);
@@ -146,23 +134,18 @@ int main(int argc, char* argv[]) {
             lastPos = file.tellg();
         }
 
+        // Проверка каждой строки файла на наличие ключевых слов
         while (std::getline(file, line)) {
             for (const auto& keyword : keywords) {
                 if (line.find(keyword) != std::string::npos) {
                     std::vector<std::string> words = split(line, ' ');
-                    int count = 0;
-                    std::string messageToSend;
-                    for (const auto& word : words) {
-                        if (count == n) break;
-                        messageToSend += word + " ";
-                        count++;
+                    std::ostringstream messageToSend;
+                    for (int i = 0; i < std::min(static_cast<int>(words.size()), n); ++i) {
+                        messageToSend << words[i] << " ";
                     }
-                    sendToTelegram(botId, chatId, messageToSend);
-                    for (int i = 0; i < n && std::getline(file, line); ++i) {
-                        // Ничего не делать
-                    }
+                    sendToTelegram(botId, chatId, messageToSend.str());
                     if (debug) {
-                        std::cerr << "Sent message to Telegram: " << messageToSend << std::endl;
+                        std::cerr << "Sent message to Telegram: " << messageToSend.str() << std::endl;
                     }
                     break;
                 }
