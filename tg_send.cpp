@@ -35,13 +35,14 @@ void sendToTelegram(std::string botId, std::string chatId, std::string message) 
 }
 
 void printUsage(const std::string& programName) {
-    std::cerr << "Usage: " << programName << " --filename <filename> --keyword <keyword1> <keyword2> ... <keywordN> --n <n> --bot-id <bot_id> --chat-id <chat_id>" << std::endl;
+    std::cerr << "Usage: " << programName << " --filename <filename> --keyword <keyword1> <keyword2> ... <keywordN> --n <n> --bot-id <bot_id> --chat-id <chat_id> [--debug]" << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  --filename   Path to the log file" << std::endl;
     std::cerr << "  --keyword    Keyword(s) to watch for in the log file" << std::endl;
     std::cerr << "  --n          Number of words to include in the message" << std::endl;
     std::cerr << "  --bot-id     Telegram Bot ID" << std::endl;
     std::cerr << "  --chat-id    Telegram Chat ID" << std::endl;
+    std::cerr << "  --debug      Enable debug mode (optional)" << std::endl;
 }
 
 bool isTextFile(const std::string& filename) {
@@ -71,6 +72,7 @@ int main(int argc, char* argv[]) {
     int n;
     std::string botId;
     std::string chatId;
+    bool debug = false; // Флаг отладки
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -86,6 +88,8 @@ int main(int argc, char* argv[]) {
             botId = argv[++i];
         } else if (arg == "--chat-id") {
             chatId = argv[++i];
+        } else if (arg == "--debug") {
+            debug = true;
         }
     }
 
@@ -125,6 +129,9 @@ int main(int argc, char* argv[]) {
                     for (int i = 0; i < n && std::getline(file, line); ++i) {
                         // Ничего не делать
                     }
+                    if (debug) {
+                        std::cerr << "Sent message to Telegram: " << messageToSend << std::endl;
+                    }
                     break;
                 }
             }
@@ -135,4 +142,3 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
-
