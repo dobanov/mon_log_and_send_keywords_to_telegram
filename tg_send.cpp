@@ -62,6 +62,11 @@ bool isTextFile(const std::string& filename) {
     return true;
 }
 
+bool fileExists(const std::string& filename) {
+    struct stat buffer;
+    return (stat(filename.c_str(), &buffer) == 0);
+}
+
 int main(int argc, char* argv[]) {
     if (argc < 2 || std::string(argv[1]) == "--help") {
         printUsage(argv[0]);
@@ -73,7 +78,7 @@ int main(int argc, char* argv[]) {
     int n;
     std::string botId;
     std::string chatId;
-    bool debug = false; // Флаг отладки
+    bool debug = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -97,6 +102,11 @@ int main(int argc, char* argv[]) {
     if (filename.empty() || keywords.empty() || n == 0 || botId.empty() || chatId.empty()) {
         std::cerr << "Missing arguments!" << std::endl;
         printUsage(argv[0]);
+        return 1;
+    }
+
+    if (!fileExists(filename)) {
+        std::cerr << "Error: " << filename << " does not exist." << std::endl;
         return 1;
     }
 
@@ -164,4 +174,3 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
-
