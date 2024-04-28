@@ -6,7 +6,6 @@
 #include <chrono>
 #include <thread>
 #include <curl/curl.h>
-#include <sys/stat.h>
 
 std::vector<std::string> split(const std::string &s, char delimiter) {
     std::vector<std::string> tokens;
@@ -61,11 +60,6 @@ bool isTextFile(const std::string& filename) {
     return true;
 }
 
-bool fileExists(const std::string& filename) {
-    struct stat buffer;
-    return (stat(filename.c_str(), &buffer) == 0);
-}
-
 int main(int argc, char* argv[]) {
     if (argc < 2 || std::string(argv[1]) == "--help") {
         printUsage(argv[0]);
@@ -101,33 +95,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (!fileExists(filename)) {
-        std::cerr << "Error: " << filename << " does not exist." << std::endl;
-        return 1;
-    }
-
     if (!isTextFile(filename)) {
         std::cerr << "Error: " << filename << " is not a text file." << std::endl;
         return 1;
     }
 
-    std::ifstream file;
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Unable to open file " << filename << std::endl;
+        return 1;
+    }
+
+    file.seekg(0, std::ios::end); // Переместить указатель в конец файла
+
     std::string line;
-
     while (true) {
-        if (!file.is_open() || !fileExists(filename)) {
-            file.close();
-            file.clear();
-            file.open(filename);
-
-            if (!file.is_open()) {
-                std::cerr << "Unable to open file " << filename << std::endl;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                continue;
-            }
-            file.seekg(0, std::ios::end); // Переместить указатель в конец файла
-        }
-
         while (std::getline(file, line)) {
             for (const auto& keyword : keywords) {
                 if (line.find(keyword) != std::string::npos) {
@@ -147,8 +129,10 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+        file.clear();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Подождать 1 секунду перед проверкой новых данных
     }
 
     return 0;
 }
+
