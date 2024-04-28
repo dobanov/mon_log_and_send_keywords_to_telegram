@@ -6,6 +6,7 @@
 #include <chrono>
 #include <thread>
 #include <curl/curl.h>
+#include <sys/stat.h>
 
 std::vector<std::string> split(const std::string &s, char delimiter) {
     std::vector<std::string> tokens;
@@ -104,16 +105,37 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        std::cerr << "Unable to open file " << filename << std::endl;
-        return 1;
-    }
-
-    file.seekg(0, std::ios::end); // Переместить указатель в конец файла
-
+    std::ifstream file;
     std::string line;
+    std::streampos lastPos;
+
     while (true) {
+        if (!file.is_open() || !file.good() || !isTextFile(filename)) {
+            file.close();
+            file.clear();
+            file.open(filename);
+
+            if (!file.is_open()) {
+                std::cerr << "Unable to open file " << filename << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                continue;
+            }
+
+            file.seekg(0, std::ios::end);
+            lastPos = file.tellg();
+            if (debug) {
+                std::cerr << "File opened: " << filename << std::endl;
+            }
+        }
+
+        if (file.tellg() < lastPos) {
+            if (debug) {
+                std::cerr << "File truncated: " << filename << std::endl;
+            }
+            file.seekg(0, std::ios::end);
+            lastPos = file.tellg();
+        }
+
         while (std::getline(file, line)) {
             for (const auto& keyword : keywords) {
                 if (line.find(keyword) != std::string::npos) {
@@ -137,8 +159,9 @@ int main(int argc, char* argv[]) {
             }
         }
         file.clear();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // Подождать 1 секунду перед проверкой новых данных
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 
     return 0;
 }
+
