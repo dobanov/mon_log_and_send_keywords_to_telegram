@@ -1,4 +1,4 @@
-This programm sends new lines from the log file that contain keyword(s) to telegram chat/bot
+This program sends new lines from the log file containing keywords to the Telegram chat/bot.
 
 Options:
   --filename   Path to the log file
