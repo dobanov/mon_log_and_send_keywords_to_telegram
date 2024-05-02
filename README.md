@@ -1,4 +1,4 @@
-This program sends new lines from the log file containing keywords to the Telegram chat/bot.
+This program monitors the log file and sends new lines from the log file containing keywords to the Telegram chat/bot.
 
 
 g++ -o tg_send tg_send.cpp -lcurl
