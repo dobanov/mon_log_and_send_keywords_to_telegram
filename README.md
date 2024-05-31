@@ -2,7 +2,8 @@ This program monitors the log file and sends new lines from the log file contain
 
 
 g++ -o tg_send tg_send.cpp -lcurl
-
+/
+g++ -std=c++17 -o tg_send tg_send.cpp -lcurl
 
 
 
