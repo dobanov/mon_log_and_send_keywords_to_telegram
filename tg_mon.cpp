@@ -7,6 +7,8 @@
 #include <thread>
 #include <curl/curl.h>
 #include <filesystem>
+#include <sys/inotify.h>
+#include <unistd.h>
 
 // Функция для разделения строки на подстроки по заданному разделителю
 std::vector<std::string> split(const std::string& s, char delimiter) {
@@ -59,7 +61,7 @@ int main(int argc, char* argv[]) {
 
     std::string filename;
     std::vector<std::string> keywords;
-    int n;
+    int n = 0;
     std::string botId;
     std::string chatId;
     bool debug = false;
@@ -102,13 +104,27 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Установка inotify
+    int inotifyFd = inotify_init();
+    if (inotifyFd == -1) {
+        std::cerr << "Failed to initialize inotify." << std::endl;
+        return 1;
+    }
+
+    int watchFd = inotify_add_watch(inotifyFd, filename.c_str(), IN_MODIFY | IN_MOVE_SELF | IN_DELETE_SELF);
+    if (watchFd == -1) {
+        std::cerr << "Failed to add inotify watch for " << filename << std::endl;
+        close(inotifyFd);
+        return 1;
+    }
+
     std::ifstream file;
     std::string line;
     std::streampos lastPos;
 
     // Бесконечный цикл мониторинга файла
     while (true) {
-        if (!file.is_open() || !file.good() || !std::filesystem::is_regular_file(filename)) {
+        if (!file.is_open() || !file.good()) {
             file.close();
             file.clear();
             file.open(filename);
@@ -126,34 +142,77 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (file.tellg() < lastPos) {
-            if (debug) {
-                std::cerr << "File truncated: " << filename << std::endl;
-            }
-            file.seekg(0, std::ios::end);
-            lastPos = file.tellg();
+        char buffer[1024];
+        ssize_t length = read(inotifyFd, buffer, sizeof(buffer));
+        if (length == -1) {
+            std::cerr << "Error reading from inotify file descriptor." << std::endl;
+            continue;
         }
 
-        // Проверка каждой строки файла на наличие ключевых слов
-        while (std::getline(file, line)) {
-            for (const auto& keyword : keywords) {
-                if (line.find(keyword) != std::string::npos) {
-                    std::vector<std::string> words = split(line, ' ');
-                    std::ostringstream messageToSend;
-                    for (int i = 0; i < std::min(static_cast<int>(words.size()), n); ++i) {
-                        messageToSend << words[i] << " ";
-                    }
-                    sendToTelegram(botId, chatId, messageToSend.str());
-                    if (debug) {
-                        std::cerr << "Sent message to Telegram: " << messageToSend.str() << std::endl;
-                    }
-                    break;
+        for (char* ptr = buffer; ptr < buffer + length; ) {
+            struct inotify_event* event = (struct inotify_event*) ptr;
+            ptr += sizeof(struct inotify_event) + event->len;
+
+            if (event->mask & (IN_MOVE_SELF | IN_DELETE_SELF)) {
+                if (debug) {
+                    std::cerr << "File moved or deleted: " << filename << std::endl;
                 }
+                inotify_rm_watch(inotifyFd, watchFd);
+                watchFd = inotify_add_watch(inotifyFd, filename.c_str(), IN_MODIFY | IN_MOVE_SELF | IN_DELETE_SELF);
+                if (watchFd == -1) {
+                    std::cerr << "Failed to add inotify watch for " << filename << std::endl;
+                    close(inotifyFd);
+                    return 1;
+                }
+                file.close();
+                file.clear();
+                file.open(filename);
+                if (!file.is_open()) {
+                    std::cerr << "Unable to open file " << filename << std::endl;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                    continue;
+                }
+                file.seekg(0, std::ios::end);
+                lastPos = file.tellg();
+                if (debug) {
+                    std::cerr << "File re-opened: " << filename << std::endl;
+                }
+            } else if (event->mask & IN_MODIFY) {
+                if (debug) {
+                    std::cerr << "File modified: " << filename << std::endl;
+                }
+
+                if (file.tellg() < lastPos) {
+                    if (debug) {
+                        std::cerr << "File truncated: " << filename << std::endl;
+                    }
+                    file.seekg(0, std::ios::end);
+                    lastPos = file.tellg();
+                }
+
+                // Проверка каждой строки файла на наличие ключевых слов
+                while (std::getline(file, line)) {
+                    for (const auto& keyword : keywords) {
+                        if (line.find(keyword) != std::string::npos) {
+                            std::vector<std::string> words = split(line, ' ');
+                            std::ostringstream messageToSend;
+                            for (int i = 0; i < std::min(static_cast<int>(words.size()), n); ++i) {
+                                messageToSend << words[i] << " ";
+                            }
+                            sendToTelegram(botId, chatId, messageToSend.str());
+                            if (debug) {
+                                std::cerr << "Sent message to Telegram: " << messageToSend.str() << std::endl;
+                            }
+                            break;
+                        }
+                    }
+                }
+                file.clear();
             }
         }
-        file.clear();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 
+    close(inotifyFd);
     return 0;
 }
