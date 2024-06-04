@@ -6,11 +6,11 @@
 #include <chrono>
 #include <thread>
 #include <curl/curl.h>
-#include <filesystem>
 #include <sys/inotify.h>
 #include <unistd.h>
+#include <filesystem>
 
-// Функция для разделения строки на подстроки по заданному разделителю
+// Function to split a string by a delimiter
 std::vector<std::string> split(const std::string& s, char delimiter) {
     std::vector<std::string> tokens;
     std::string token;
@@ -21,12 +21,12 @@ std::vector<std::string> split(const std::string& s, char delimiter) {
     return tokens;
 }
 
-// Функция обратного вызова для записи данных CURL
+// CURL write callback function
 size_t writeCallback(char* contents, size_t size, size_t nmemb, void* userp) {
     return size * nmemb;
 }
 
-// Функция для отправки сообщения в Telegram
+// Function to send a message to Telegram
 void sendToTelegram(const std::string& botId, const std::string& chatId, const std::string& message) {
     CURL* curl = curl_easy_init();
     if (curl) {
@@ -40,7 +40,7 @@ void sendToTelegram(const std::string& botId, const std::string& chatId, const s
     }
 }
 
-// Функция для вывода информации о использовании программы
+// Function to print the usage information
 void printUsage(const std::string& programName) {
     std::cerr << "Usage: " << programName << " --filename <filename> --keyword <keyword1> <keyword2> ... <keywordN> --n <n> --bot-id <bot_id> --chat-id <chat_id> [--debug]" << std::endl;
     std::cerr << "Options:" << std::endl;
@@ -50,15 +50,52 @@ void printUsage(const std::string& programName) {
     std::cerr << "  --bot-id     Telegram Bot ID" << std::endl;
     std::cerr << "  --chat-id    Telegram Chat ID" << std::endl;
     std::cerr << "  --debug      Enable debug mode (optional)" << std::endl;
+    std::cerr << std::endl;
+    std::cerr << "If no command-line arguments are provided, the program will read configuration from ~/.config/tg_log.ini" << std::endl;
+}
+
+// Function to read configuration from a file
+bool readConfig(const std::string& configPath, std::string& filename, std::vector<std::string>& keywords, int& n, std::string& botId, std::string& chatId, bool& debug) {
+    std::ifstream config(configPath);
+    if (!config.is_open()) {
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(config, line)) {
+        if (line.find("filename=") != std::string::npos) {
+            filename = line.substr(line.find("=") + 1);
+        } else if (line.find("keyword=") != std::string::npos) {
+            keywords = split(line.substr(line.find("=") + 1), ',');
+        } else if (line.find("n=") != std::string::npos) {
+            n = std::stoi(line.substr(line.find("=") + 1));
+        } else if (line.find("bot_id=") != std::string::npos) {
+            botId = line.substr(line.find("=") + 1);
+        } else if (line.find("chat_id=") != std::string::npos) {
+            chatId = line.substr(line.find("=") + 1);
+        } else if (line.find("debug=") != std::string::npos) {
+            debug = (line.substr(line.find("=") + 1) == "true");
+        }
+    }
+
+    config.close();
+    return true;
+}
+
+// Function to create a default configuration file
+void createDefaultConfig(const std::string& configPath) {
+    std::ofstream config(configPath);
+    config << "filename=\n";
+    config << "keyword=\n";
+    config << "n=0\n";
+    config << "bot_id=\n";
+    config << "chat_id=\n";
+    config << "debug=false\n";
+    config.close();
 }
 
 int main(int argc, char* argv[]) {
-    // Проверка наличия аргументов командной строки
-    if (argc < 2 || std::string(argv[1]) == "--help") {
-        printUsage(argv[0]);
-        return 1;
-    }
-
+    std::string configPath = std::string(getenv("HOME")) + "/.config/tg_log.ini";
     std::string filename;
     std::vector<std::string> keywords;
     int n = 0;
@@ -66,34 +103,57 @@ int main(int argc, char* argv[]) {
     std::string chatId;
     bool debug = false;
 
-    // Парсинг аргументов командной строки
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--filename") {
-            filename = argv[++i];
-        } else if (arg == "--keyword") {
-            while (i + 1 < argc && argv[i + 1][0] != '-') {
-                keywords.push_back(argv[++i]);
+    // Check if no command-line arguments are provided
+    bool noArguments = (argc == 1);
+
+    if (noArguments) {
+        if (!std::filesystem::exists(configPath)) {
+            createDefaultConfig(configPath);
+            std::cerr << "Configuration file created at " << configPath << ". Please fill in the required parameters." << std::endl;
+            std::cerr << "Configuration format:" << std::endl;
+            std::cerr << "filename=<path_to_log_file>" << std::endl;
+            std::cerr << "keyword=<keyword1,keyword2,...>" << std::endl;
+            std::cerr << "n=<number_of_words>" << std::endl;
+            std::cerr << "bot_id=<telegram_bot_id>" << std::endl;
+            std::cerr << "chat_id=<telegram_chat_id>" << std::endl;
+            std::cerr << "debug=<true|false>" << std::endl;
+            return 1;
+        }
+
+        if (!readConfig(configPath, filename, keywords, n, botId, chatId, debug)) {
+            std::cerr << "Failed to read configuration file." << std::endl;
+            return 1;
+        }
+    } else {
+        // Parsing command-line arguments
+        for (int i = 1; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--filename") {
+                filename = argv[++i];
+            } else if (arg == "--keyword") {
+                while (i + 1 < argc && argv[i + 1][0] != '-') {
+                    keywords.push_back(argv[++i]);
+                }
+            } else if (arg == "--n") {
+                n = std::stoi(argv[++i]);
+            } else if (arg == "--bot-id") {
+                botId = argv[++i];
+            } else if (arg == "--chat-id") {
+                chatId = argv[++i];
+            } else if (arg == "--debug") {
+                debug = true;
             }
-        } else if (arg == "--n") {
-            n = std::stoi(argv[++i]);
-        } else if (arg == "--bot-id") {
-            botId = argv[++i];
-        } else if (arg == "--chat-id") {
-            chatId = argv[++i];
-        } else if (arg == "--debug") {
-            debug = true;
         }
     }
 
-    // Проверка наличия всех необходимых аргументов
+    // Checking for missing arguments
     if (filename.empty() || keywords.empty() || n == 0 || botId.empty() || chatId.empty()) {
         std::cerr << "Missing arguments!" << std::endl;
         printUsage(argv[0]);
         return 1;
     }
 
-    // Проверка существования и типа файла
+    // Checking if the file exists and is a regular file
     if (!std::filesystem::exists(filename)) {
         std::cerr << "Error: " << filename << " does not exist." << std::endl;
         return 1;
@@ -104,7 +164,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Установка inotify
+    // Setting up inotify
     int inotifyFd = inotify_init();
     if (inotifyFd == -1) {
         std::cerr << "Failed to initialize inotify." << std::endl;
@@ -122,7 +182,7 @@ int main(int argc, char* argv[]) {
     std::string line;
     std::streampos lastPos;
 
-    // Бесконечный цикл мониторинга файла
+    // Infinite loop to monitor the file
     while (true) {
         if (!file.is_open() || !file.good()) {
             file.close();
@@ -190,7 +250,7 @@ int main(int argc, char* argv[]) {
                     lastPos = file.tellg();
                 }
 
-                // Проверка каждой строки файла на наличие ключевых слов
+                // Checking each line for keywords
                 while (std::getline(file, line)) {
                     for (const auto& keyword : keywords) {
                         if (line.find(keyword) != std::string::npos) {
