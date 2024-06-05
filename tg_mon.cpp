@@ -42,9 +42,9 @@ void sendToTelegram(const std::string& botId, const std::string& chatId, const s
 
 // Function to print the usage information
 void printUsage(const std::string& programName) {
-    std::cerr << "Usage: " << programName << " --filename <filename> --keyword <keyword1> <keyword2> ... <keywordN> --n <n> --bot-id <bot_id> --chat-id <chat_id> [--debug]" << std::endl;
+    std::cerr << "Usage: " << programName << " --filename <filename1,filename2,...> --keyword <keyword1> <keyword2> ... <keywordN> --n <n> --bot-id <bot_id> --chat-id <chat_id> [--debug]" << std::endl;
     std::cerr << "Options:" << std::endl;
-    std::cerr << "  --filename   Path to the log file" << std::endl;
+    std::cerr << "  --filename   Path to the log file(s), separated by commas" << std::endl;
     std::cerr << "  --keyword    Keyword(s) to watch for in the log file" << std::endl;
     std::cerr << "  --n          Number of words to include in the message" << std::endl;
     std::cerr << "  --bot-id     Telegram Bot ID" << std::endl;
@@ -52,10 +52,17 @@ void printUsage(const std::string& programName) {
     std::cerr << "  --debug      Enable debug mode (optional)" << std::endl;
     std::cerr << std::endl;
     std::cerr << "If no command-line arguments are provided, the program will read configuration from ~/.config/tg_log.ini" << std::endl;
+    std::cerr << "Ensure the configuration file exists with the following format:" << std::endl;
+    std::cerr << "filename=<path_to_log_file1,path_to_log_file2,...>" << std::endl;
+    std::cerr << "keyword=<keyword1,keyword2,...>" << std::endl;
+    std::cerr << "n=<number_of_words>" << std::endl;
+    std::cerr << "bot_id=<telegram_bot_id>" << std::endl;
+    std::cerr << "chat_id=<telegram_chat_id>" << std::endl;
+    std::cerr << "debug=<true|false>" << std::endl;
 }
 
 // Function to read configuration from a file
-bool readConfig(const std::string& configPath, std::string& filename, std::vector<std::string>& keywords, int& n, std::string& botId, std::string& chatId, bool& debug) {
+bool readConfig(const std::string& configPath, std::vector<std::string>& filenames, std::vector<std::string>& keywords, int& n, std::string& botId, std::string& chatId, bool& debug) {
     std::ifstream config(configPath);
     if (!config.is_open()) {
         return false;
@@ -64,7 +71,7 @@ bool readConfig(const std::string& configPath, std::string& filename, std::vecto
     std::string line;
     while (std::getline(config, line)) {
         if (line.find("filename=") != std::string::npos) {
-            filename = line.substr(line.find("=") + 1);
+            filenames = split(line.substr(line.find("=") + 1), ',');
         } else if (line.find("keyword=") != std::string::npos) {
             keywords = split(line.substr(line.find("=") + 1), ',');
         } else if (line.find("n=") != std::string::npos) {
@@ -96,7 +103,7 @@ void createDefaultConfig(const std::string& configPath) {
 
 int main(int argc, char* argv[]) {
     std::string configPath = std::string(getenv("HOME")) + "/.config/tg_log.ini";
-    std::string filename;
+    std::vector<std::string> filenames;
     std::vector<std::string> keywords;
     int n = 0;
     std::string botId;
@@ -111,7 +118,7 @@ int main(int argc, char* argv[]) {
             createDefaultConfig(configPath);
             std::cerr << "Configuration file created at " << configPath << ". Please fill in the required parameters." << std::endl;
             std::cerr << "Configuration format:" << std::endl;
-            std::cerr << "filename=<path_to_log_file>" << std::endl;
+            std::cerr << "filename=<path_to_log_file1,path_to_log_file2,...>" << std::endl;
             std::cerr << "keyword=<keyword1,keyword2,...>" << std::endl;
             std::cerr << "n=<number_of_words>" << std::endl;
             std::cerr << "bot_id=<telegram_bot_id>" << std::endl;
@@ -120,7 +127,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        if (!readConfig(configPath, filename, keywords, n, botId, chatId, debug)) {
+        if (!readConfig(configPath, filenames, keywords, n, botId, chatId, debug)) {
             std::cerr << "Failed to read configuration file." << std::endl;
             return 1;
         }
@@ -129,7 +136,7 @@ int main(int argc, char* argv[]) {
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--filename") {
-                filename = argv[++i];
+                filenames = split(argv[++i], ',');
             } else if (arg == "--keyword") {
                 while (i + 1 < argc && argv[i + 1][0] != '-') {
                     keywords.push_back(argv[++i]);
@@ -147,21 +154,23 @@ int main(int argc, char* argv[]) {
     }
 
     // Checking for missing arguments
-    if (filename.empty() || keywords.empty() || n == 0 || botId.empty() || chatId.empty()) {
+    if (filenames.empty() || keywords.empty() || n == 0 || botId.empty() || chatId.empty()) {
         std::cerr << "Missing arguments!" << std::endl;
         printUsage(argv[0]);
         return 1;
     }
 
-    // Checking if the file exists and is a regular file
-    if (!std::filesystem::exists(filename)) {
-        std::cerr << "Error: " << filename << " does not exist." << std::endl;
-        return 1;
-    }
+    // Checking if the files exist and are regular files
+    for (const auto& filename : filenames) {
+        if (!std::filesystem::exists(filename)) {
+            std::cerr << "Error: " << filename << " does not exist." << std::endl;
+            return 1;
+        }
 
-    if (!std::filesystem::is_regular_file(filename)) {
-        std::cerr << "Error: " << filename << " is not a regular file." << std::endl;
-        return 1;
+        if (!std::filesystem::is_regular_file(filename)) {
+            std::cerr << "Error: " << filename << " is not a regular file." << std::endl;
+            return 1;
+        }
     }
 
     // Setting up inotify
@@ -171,37 +180,32 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    int watchFd = inotify_add_watch(inotifyFd, filename.c_str(), IN_MODIFY | IN_MOVE_SELF | IN_DELETE_SELF);
-    if (watchFd == -1) {
-        std::cerr << "Failed to add inotify watch for " << filename << std::endl;
-        close(inotifyFd);
-        return 1;
+    std::vector<int> watchFds;
+    for (const auto& filename : filenames) {
+        int watchFd = inotify_add_watch(inotifyFd, filename.c_str(), IN_MODIFY | IN_MOVE_SELF | IN_DELETE_SELF);
+        if (watchFd == -1) {
+            std::cerr << "Failed to add inotify watch for " << filename << std::endl;
+            close(inotifyFd);
+            return 1;
+        }
+        watchFds.push_back(watchFd);
     }
 
-    std::ifstream file;
-    std::string line;
-    std::streampos lastPos;
+    std::vector<std::ifstream> files(filenames.size());
+    std::vector<std::streampos> lastPositions(filenames.size());
 
-    // Infinite loop to monitor the file
-    while (true) {
-        if (!file.is_open() || !file.good()) {
-            file.close();
-            file.clear();
-            file.open(filename);
-
-            if (!file.is_open()) {
-                std::cerr << "Unable to open file " << filename << std::endl;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                continue;
-            }
-
-            file.seekg(0, std::ios::end);
-            lastPos = file.tellg();
-            if (debug) {
-                std::cerr << "File opened: " << filename << std::endl;
-            }
+    for (size_t i = 0; i < filenames.size(); ++i) {
+        files[i].open(filenames[i]);
+        if (!files[i].is_open()) {
+            std::cerr << "Unable to open file " << filenames[i] << std::endl;
+            return 1;
         }
+        files[i].seekg(0, std::ios::end);
+        lastPositions[i] = files[i].tellg();
+    }
 
+    // Monitoring files in an infinite loop
+    while (true) {
         char buffer[1024];
         ssize_t length = read(inotifyFd, buffer, sizeof(buffer));
         if (length == -1) {
@@ -213,61 +217,74 @@ int main(int argc, char* argv[]) {
             struct inotify_event* event = (struct inotify_event*) ptr;
             ptr += sizeof(struct inotify_event) + event->len;
 
+            std::string filename;
+            for (size_t i = 0; i < watchFds.size(); ++i) {
+                if (watchFds[i] == event->wd) {
+                    filename = filenames[i];
+                    break;
+                }
+            }
+
             if (event->mask & (IN_MOVE_SELF | IN_DELETE_SELF)) {
                 if (debug) {
                     std::cerr << "File moved or deleted: " << filename << std::endl;
                 }
-                inotify_rm_watch(inotifyFd, watchFd);
-                watchFd = inotify_add_watch(inotifyFd, filename.c_str(), IN_MODIFY | IN_MOVE_SELF | IN_DELETE_SELF);
-                if (watchFd == -1) {
-                    std::cerr << "Failed to add inotify watch for " << filename << std::endl;
-                    close(inotifyFd);
-                    return 1;
-                }
-                file.close();
-                file.clear();
-                file.open(filename);
-                if (!file.is_open()) {
-                    std::cerr << "Unable to open file " << filename << std::endl;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                    continue;
-                }
-                file.seekg(0, std::ios::end);
-                lastPos = file.tellg();
-                if (debug) {
-                    std::cerr << "File re-opened: " << filename << std::endl;
+                for (size_t i = 0; i < watchFds.size(); ++i) {
+                    if (watchFds[i] == event->wd) {
+                        inotify_rm_watch(inotifyFd, watchFds[i]);
+                        watchFds[i] = inotify_add_watch(inotifyFd, filenames[i].c_str(), IN_MODIFY | IN_MOVE_SELF | IN_DELETE_SELF);
+                        if (watchFds[i] == -1) {
+                            std::cerr << "Failed to add inotify watch for " << filenames[i] << std::endl;
+                            close(inotifyFd);
+                            return 1;
+                        }
+                        files[i].close();
+                        files[i].clear();
+                        files[i].open(filenames[i]);
+                        if (!files[i].is_open()) {
+                            std::cerr << "Unable to open file " << filenames[i] << std::endl;
+                            return 1;
+                        }
+                        files[i].seekg(0, std::ios::end);
+                        lastPositions[i] = files[i].tellg();
+                    }
                 }
             } else if (event->mask & IN_MODIFY) {
                 if (debug) {
                     std::cerr << "File modified: " << filename << std::endl;
                 }
 
-                if (file.tellg() < lastPos) {
-                    if (debug) {
-                        std::cerr << "File truncated: " << filename << std::endl;
-                    }
-                    file.seekg(0, std::ios::end);
-                    lastPos = file.tellg();
-                }
-
-                // Checking each line for keywords
-                while (std::getline(file, line)) {
-                    for (const auto& keyword : keywords) {
-                        if (line.find(keyword) != std::string::npos) {
-                            std::vector<std::string> words = split(line, ' ');
-                            std::ostringstream messageToSend;
-                            for (int i = 0; i < std::min(static_cast<int>(words.size()), n); ++i) {
-                                messageToSend << words[i] << " ";
-                            }
-                            sendToTelegram(botId, chatId, messageToSend.str());
+                for (size_t i = 0; i < watchFds.size(); ++i) {
+                    if (watchFds[i] == event->wd) {
+                        if (files[i].tellg() < lastPositions[i]) {
                             if (debug) {
-                                std::cerr << "Sent message to Telegram: " << messageToSend.str() << std::endl;
+                                std::cerr << "File truncated: " << filenames[i] << std::endl;
                             }
-                            break;
+                            files[i].seekg(0, std::ios::end);
+                            lastPositions[i] = files[i].tellg();
                         }
+
+                        // Checking each line for keywords
+                        std::string line;
+                        while (std::getline(files[i], line)) {
+                            for (const auto& keyword : keywords) {
+                                if (line.find(keyword) != std::string::npos) {
+                                    std::vector<std::string> words = split(line, ' ');
+                                    std::ostringstream messageToSend;
+                                    for (int j = 0; j < std::min(static_cast<int>(words.size()), n); ++j) {
+                                        messageToSend << words[j] << " ";
+                                    }
+                                    sendToTelegram(botId, chatId, messageToSend.str());
+                                    if (debug) {
+                                        std::cerr << "Sent message to Telegram: " << messageToSend.str() << std::endl;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        files[i].clear();
                     }
                 }
-                file.clear();
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
