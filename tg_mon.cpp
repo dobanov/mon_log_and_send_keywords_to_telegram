@@ -42,7 +42,7 @@ void sendToTelegram(const std::string& botId, const std::string& chatId, const s
 
 // Function to print the usage information
 void printUsage(const std::string& programName) {
-    std::cerr << "Usage: " << programName << " --filename <filename1,filename2,...> --keyword <keyword1> <keyword2> ... <keywordN> --n <n> --bot-id <bot_id> --chat-id <chat_id> [--debug]" << std::endl;
+    std::cerr << "Usage: " << programName << " --filename <filename1,filename2,...> --keyword <keyword1,keyword2,...> --n <n> --bot-id <bot_id> --chat-id <chat_id> [--debug]" << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  --filename   Path to the log file(s), separated by commas" << std::endl;
     std::cerr << "  --keyword    Keyword(s) to watch for in the log file" << std::endl;
@@ -117,13 +117,7 @@ int main(int argc, char* argv[]) {
         if (!std::filesystem::exists(configPath)) {
             createDefaultConfig(configPath);
             std::cerr << "Configuration file created at " << configPath << ". Please fill in the required parameters." << std::endl;
-            std::cerr << "Configuration format:" << std::endl;
-            std::cerr << "filename=<path_to_log_file1,path_to_log_file2,...>" << std::endl;
-            std::cerr << "keyword=<keyword1,keyword2,...>" << std::endl;
-            std::cerr << "n=<number_of_words>" << std::endl;
-            std::cerr << "bot_id=<telegram_bot_id>" << std::endl;
-            std::cerr << "chat_id=<telegram_chat_id>" << std::endl;
-            std::cerr << "debug=<true|false>" << std::endl;
+            printUsage(argv[0]);
             return 1;
         }
 
@@ -138,9 +132,7 @@ int main(int argc, char* argv[]) {
             if (arg == "--filename") {
                 filenames = split(argv[++i], ',');
             } else if (arg == "--keyword") {
-                while (i + 1 < argc && argv[i + 1][0] != '-') {
-                    keywords.push_back(argv[++i]);
-                }
+                keywords = split(argv[++i], ',');
             } else if (arg == "--n") {
                 n = std::stoi(argv[++i]);
             } else if (arg == "--bot-id") {
@@ -206,7 +198,7 @@ int main(int argc, char* argv[]) {
 
     // Monitoring files in an infinite loop
     while (true) {
-        char buffer[1024];
+        char buffer[1024 * (sizeof(struct inotify_event) + 16)];
         ssize_t length = read(inotifyFd, buffer, sizeof(buffer));
         if (length == -1) {
             std::cerr << "Error reading from inotify file descriptor." << std::endl;
@@ -266,6 +258,7 @@ int main(int argc, char* argv[]) {
 
                         // Checking each line for keywords
                         std::string line;
+                        files[i].seekg(lastPositions[i]);
                         while (std::getline(files[i], line)) {
                             for (const auto& keyword : keywords) {
                                 if (line.find(keyword) != std::string::npos) {
@@ -283,6 +276,7 @@ int main(int argc, char* argv[]) {
                             }
                         }
                         files[i].clear();
+                        lastPositions[i] = files[i].tellg();
                     }
                 }
             }
