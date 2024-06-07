@@ -35,7 +35,10 @@ void sendToTelegram(const std::string& botId, const std::string& chatId, const s
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
-        curl_easy_perform(curl);
+        CURLcode res = curl_easy_perform(curl);
+        if (res != CURLE_OK) {
+            std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << std::endl;
+        }
         curl_easy_cleanup(curl);
     }
 }
@@ -45,7 +48,7 @@ void printUsage(const std::string& programName) {
     std::cerr << "Usage: " << programName << " --filename <filename1,filename2,...> --keyword <keyword1,keyword2,...> --n <n> --bot-id <bot_id> --chat-id <chat_id> [--debug]" << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  --filename   Path to the log file(s), separated by commas" << std::endl;
-    std::cerr << "  --keyword    Keyword(s) to watch for in the log file" << std::endl;
+    std::cerr << "  --keyword    Keyword(s) to watch for in the log file, separated by commas" << std::endl;
     std::cerr << "  --n          Number of words to include in the message" << std::endl;
     std::cerr << "  --bot-id     Telegram Bot ID" << std::endl;
     std::cerr << "  --chat-id    Telegram Chat ID" << std::endl;
@@ -102,7 +105,13 @@ void createDefaultConfig(const std::string& configPath) {
 }
 
 int main(int argc, char* argv[]) {
-    std::string configPath = std::string(getenv("HOME")) + "/.config/tg_log.ini";
+    const char* homeEnv = getenv("HOME");
+    if (!homeEnv) {
+        std::cerr << "Error: HOME environment variable is not set." << std::endl;
+        return 1;
+    }
+
+    std::string configPath = std::string(homeEnv) + "/.config/tg_log.ini";
     std::vector<std::string> filenames;
     std::vector<std::string> keywords;
     int n = 0;
@@ -117,7 +126,13 @@ int main(int argc, char* argv[]) {
         if (!std::filesystem::exists(configPath)) {
             createDefaultConfig(configPath);
             std::cerr << "Configuration file created at " << configPath << ". Please fill in the required parameters." << std::endl;
-            printUsage(argv[0]);
+            std::cerr << "Configuration format:" << std::endl;
+            std::cerr << "filename=<path_to_log_file1,path_to_log_file2,...>" << std::endl;
+            std::cerr << "keyword=<keyword1,keyword2,...>" << std::endl;
+            std::cerr << "n=<number_of_words>" << std::endl;
+            std::cerr << "bot_id=<telegram_bot_id>" << std::endl;
+            std::cerr << "chat_id=<telegram_chat_id>" << std::endl;
+            std::cerr << "debug=<true|false>" << std::endl;
             return 1;
         }
 
@@ -152,20 +167,28 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Checking if the files exist and are regular files
-    for (const auto& filename : filenames) {
-        if (!std::filesystem::exists(filename)) {
-            std::cerr << "Error: " << filename << " does not exist." << std::endl;
-            return 1;
+    // Print parsed arguments for debugging
+    if (debug) {
+        std::cerr << "Parsed arguments:" << std::endl;
+        std::cerr << "  filenames: ";
+        for (const auto& filename : filenames) {
+            std::cerr << filename << " ";
         }
+        std::cerr << std::endl;
 
-        if (!std::filesystem::is_regular_file(filename)) {
-            std::cerr << "Error: " << filename << " is not a regular file." << std::endl;
-            return 1;
+        std::cerr << "  keywords: ";
+        for (const auto& keyword : keywords) {
+            std::cerr << keyword << " ";
         }
+        std::cerr << std::endl;
+
+        std::cerr << "  n: " << n << std::endl;
+        std::cerr << "  botId: " << botId << std::endl;
+        std::cerr << "  chatId: " << chatId << std::endl;
+        std::cerr << "  debug: " << std::boolalpha << debug << std::endl;
     }
 
-    // Setting up inotify
+    // Initialize inotify
     int inotifyFd = inotify_init();
     if (inotifyFd == -1) {
         std::cerr << "Failed to initialize inotify." << std::endl;
@@ -198,7 +221,7 @@ int main(int argc, char* argv[]) {
 
     // Monitoring files in an infinite loop
     while (true) {
-        char buffer[1024 * (sizeof(struct inotify_event) + 16)];
+        char buffer[1024];
         ssize_t length = read(inotifyFd, buffer, sizeof(buffer));
         if (length == -1) {
             std::cerr << "Error reading from inotify file descriptor." << std::endl;
@@ -258,7 +281,6 @@ int main(int argc, char* argv[]) {
 
                         // Checking each line for keywords
                         std::string line;
-                        files[i].seekg(lastPositions[i]);
                         while (std::getline(files[i], line)) {
                             for (const auto& keyword : keywords) {
                                 if (line.find(keyword) != std::string::npos) {
@@ -276,7 +298,6 @@ int main(int argc, char* argv[]) {
                             }
                         }
                         files[i].clear();
-                        lastPositions[i] = files[i].tellg();
                     }
                 }
             }
