@@ -1,0 +1,12 @@
+[Unit]
+Description=Telegram Log Monitor Service
+After=network.target
+
+[Service]
+ExecStart=/path/to/bin
+Restart=on-failure
+User=root
+Environment="HOME=/root"
+
+[Install]
+WantedBy=multi-user.target
