@@ -10,7 +10,7 @@ g++ -std=c++17 -o tg_send tg_send.cpp -lcurl
 Options:
 
 
-  --filename   Path to the log file
+  --filename   Path to the log file(s)
 
   --keyword    Keyword(s) to watch for in the log file
 
