@@ -12,7 +12,7 @@ Options:
 
   --filename   Path to the log file(s)
 
-  --keyword    Keyword(s) to watch for in the log file
+  --keyword    Keyword(s) to watch for in the log file(s)
 
   --n          Number of words to include in the message
 
