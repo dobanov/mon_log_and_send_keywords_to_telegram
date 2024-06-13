@@ -18,5 +18,5 @@ Options:
 
   --bot-id     Telegram Bot ID
 
-  --chat-id    Telegram Chat ID
+  --chat-id    Telegram Chat ID(s)
   
