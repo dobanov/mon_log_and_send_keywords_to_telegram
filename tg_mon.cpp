@@ -26,32 +26,50 @@ size_t writeCallback(char* contents, size_t size, size_t nmemb, void* userp) {
     return size * nmemb;
 }
 
-// Function to send a message to Telegram
-void sendToTelegram(const std::string& botId, const std::string& chatId, const std::string& message) {
+// Function to send a message to multiple Telegram chat IDs
+void sendTextToTelegram(const std::string& botId, const std::vector<std::string>& chatIds, const std::string& message, bool debugMode) {
     CURL* curl = curl_easy_init();
     if (curl) {
         std::string url = "https://api.telegram.org/bot" + botId + "/sendMessage";
-        std::string data = "chat_id=" + chatId + "&text=" + message;
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data.c_str());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
-        CURLcode res = curl_easy_perform(curl);
-        if (res != CURLE_OK) {
-            std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << std::endl;
+        std::string escapedMessage = curl_easy_escape(curl, message.c_str(), 0);
+
+        for (const auto& chatId : chatIds) {
+            std::string data = "chat_id=" + chatId + "&text=" + escapedMessage;
+            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data.c_str());
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+
+            std::string response_string;
+            std::string header_string;
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
+            curl_easy_setopt(curl, CURLOPT_HEADERDATA, &header_string);
+
+            CURLcode res = curl_easy_perform(curl);
+            if (res != CURLE_OK) {
+                std::cerr << "Failed to send message to Telegram: " << curl_easy_strerror(res) << std::endl;
+            }
+
+            if (debugMode) {
+                std::cout << "Response: " << response_string << std::endl;
+                std::cout << "Headers: " << header_string << std::endl;
+                std::cout << "Text message sent successfully to chat ID: " << chatId << std::endl;
+            }
         }
+
         curl_easy_cleanup(curl);
     }
 }
 
 // Function to print the usage information
 void printUsage(const std::string& programName) {
-    std::cerr << "Usage: " << programName << " --filename <filename1,filename2,...> --keyword <keyword1,keyword2,...> --n <n> --bot-id <bot_id> --chat-id <chat_id> [--debug]" << std::endl;
+    std::cerr << "Usage: " << programName << " --filename <filename1,filename2,...> --keyword <keyword1,keyword2,...> --n <n> --bot-id <bot_id> --chat-id <chat_id1,chat_id2,...> [--debug]" << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  --filename   Path to the log file(s), separated by commas" << std::endl;
     std::cerr << "  --keyword    Keyword(s) to watch for in the log file, separated by commas" << std::endl;
     std::cerr << "  --n          Number of words to include in the message" << std::endl;
     std::cerr << "  --bot-id     Telegram Bot ID" << std::endl;
-    std::cerr << "  --chat-id    Telegram Chat ID" << std::endl;
+    std::cerr << "  --chat-id    Telegram Chat IDs, separated by commas" << std::endl;
     std::cerr << "  --debug      Enable debug mode (optional)" << std::endl;
     std::cerr << std::endl;
     std::cerr << "If no command-line arguments are provided, the program will read configuration from ~/.config/tg_log.ini" << std::endl;
@@ -60,12 +78,12 @@ void printUsage(const std::string& programName) {
     std::cerr << "keyword=<keyword1,keyword2,...>" << std::endl;
     std::cerr << "n=<number_of_words>" << std::endl;
     std::cerr << "bot_id=<telegram_bot_id>" << std::endl;
-    std::cerr << "chat_id=<telegram_chat_id>" << std::endl;
+    std::cerr << "chat_id=<telegram_chat_id1,telegram_chat_id2,...>" << std::endl;
     std::cerr << "debug=<true|false>" << std::endl;
 }
 
 // Function to read configuration from a file
-bool readConfig(const std::string& configPath, std::vector<std::string>& filenames, std::vector<std::string>& keywords, int& n, std::string& botId, std::string& chatId, bool& debug) {
+bool readConfig(const std::string& configPath, std::vector<std::string>& filenames, std::vector<std::string>& keywords, int& n, std::string& botId, std::vector<std::string>& chatIds, bool& debug) {
     std::ifstream config(configPath);
     if (!config.is_open()) {
         return false;
@@ -82,7 +100,7 @@ bool readConfig(const std::string& configPath, std::vector<std::string>& filenam
         } else if (line.find("bot_id=") != std::string::npos) {
             botId = line.substr(line.find("=") + 1);
         } else if (line.find("chat_id=") != std::string::npos) {
-            chatId = line.substr(line.find("=") + 1);
+            chatIds = split(line.substr(line.find("=") + 1), ',');
         } else if (line.find("debug=") != std::string::npos) {
             debug = (line.substr(line.find("=") + 1) == "true");
         }
@@ -116,7 +134,7 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> keywords;
     int n = 0;
     std::string botId;
-    std::string chatId;
+    std::vector<std::string> chatIds;
     bool debug = false;
 
     // Check if no command-line arguments are provided
@@ -131,12 +149,12 @@ int main(int argc, char* argv[]) {
             std::cerr << "keyword=<keyword1,keyword2,...>" << std::endl;
             std::cerr << "n=<number_of_words>" << std::endl;
             std::cerr << "bot_id=<telegram_bot_id>" << std::endl;
-            std::cerr << "chat_id=<telegram_chat_id>" << std::endl;
+            std::cerr << "chat_id=<telegram_chat_id1,telegram_chat_id2,...>" << std::endl;
             std::cerr << "debug=<true|false>" << std::endl;
             return 1;
         }
 
-        if (!readConfig(configPath, filenames, keywords, n, botId, chatId, debug)) {
+        if (!readConfig(configPath, filenames, keywords, n, botId, chatIds, debug)) {
             std::cerr << "Failed to read configuration file." << std::endl;
             return 1;
         }
@@ -153,7 +171,7 @@ int main(int argc, char* argv[]) {
             } else if (arg == "--bot-id") {
                 botId = argv[++i];
             } else if (arg == "--chat-id") {
-                chatId = argv[++i];
+                chatIds = split(argv[++i], ',');
             } else if (arg == "--debug") {
                 debug = true;
             }
@@ -161,7 +179,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Checking for missing arguments
-    if (filenames.empty() || keywords.empty() || n == 0 || botId.empty() || chatId.empty()) {
+    if (filenames.empty() || keywords.empty() || n == 0 || botId.empty() || chatIds.empty()) {
         std::cerr << "Missing arguments!" << std::endl;
         printUsage(argv[0]);
         return 1;
@@ -184,7 +202,12 @@ int main(int argc, char* argv[]) {
 
         std::cerr << "  n: " << n << std::endl;
         std::cerr << "  botId: " << botId << std::endl;
-        std::cerr << "  chatId: " << chatId << std::endl;
+        std::cerr << "  chatIds: ";
+        for (const auto& chatId : chatIds) {
+            std::cerr << chatId << " ";
+        }
+        std::cerr << std::endl;
+
         std::cerr << "  debug: " << std::boolalpha << debug << std::endl;
     }
 
@@ -289,7 +312,7 @@ int main(int argc, char* argv[]) {
                                     for (int j = 0; j < std::min(static_cast<int>(words.size()), n); ++j) {
                                         messageToSend << words[j] << " ";
                                     }
-                                    sendToTelegram(botId, chatId, messageToSend.str());
+                                    sendTextToTelegram(botId, chatIds, messageToSend.str(), debug);
                                     if (debug) {
                                         std::cerr << "Sent message to Telegram: " << messageToSend.str() << std::endl;
                                     }
