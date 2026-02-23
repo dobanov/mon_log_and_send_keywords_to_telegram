@@ -1,134 +1,305 @@
 import argparse
 import os
+import sys
 import time
 import requests
 import logging
+from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+log = logging.getLogger(__name__)
 
-def send_text_to_telegram(bot_id, chat_ids, message, debug_mode):
+
+# ─── Telegram ────────────────────────────────────────────────────────────────
+
+def send_text_to_telegram(bot_id: str, chat_ids: list[str],
+                           message: str, debug_mode: bool) -> None:
     url = f"https://api.telegram.org/bot{bot_id}/sendMessage"
     for chat_id in chat_ids:
-        payload = {
-            'chat_id': chat_id,
-            'text': message
-        }
-        response = requests.post(url, data=payload)
-        if debug_mode:
-            logging.info(f"Sent message to chat ID {chat_id}: {message}")
-            logging.info(f"Response: {response.text}")
+        payload = {'chat_id': chat_id, 'text': message}
+        try:
+            response = requests.post(url, data=payload, timeout=10)
+            response.raise_for_status()
+            if debug_mode:
+                log.info("Sent to %s: %s", chat_id, message)
+                log.debug("Response: %s", response.text)
+        except requests.RequestException as e:
+            log.error("Failed to send to Telegram (chat %s): %s", chat_id, e)
+
+
+# ─── Watchdog handler ────────────────────────────────────────────────────────
 
 class LogFileEventHandler(FileSystemEventHandler):
-    def __init__(self, keywords, bot_id, chat_ids, n, debug_mode):
+    """Следит за директориями, фильтрует события по именам файлов."""
+
+    def __init__(self, filenames: list[str], keywords: list[str],
+                 bot_id: str, chat_ids: list[str], n: int, debug_mode: bool):
+        super().__init__()
+        # Нормализуем пути для надёжного сравнения
+        self.watched = {str(Path(f).resolve()) for f in filenames}
         self.keywords = keywords
         self.bot_id = bot_id
         self.chat_ids = chat_ids
         self.n = n
         self.debug_mode = debug_mode
-        self.files = {}
-        self.positions = {}
+        # file_path -> открытый файловый объект
+        self._files: dict[str, object] = {}
+
+    # ── открыть/переоткрыть файл, встав в конец ──
+    def _open_at_end(self, path: str):
+        f = self._files.get(path)
+        if f:
+            try:
+                f.close()
+            except OSError:
+                pass
+        try:
+            f = open(path, 'r', errors='replace')
+            f.seek(0, os.SEEK_END)
+            self._files[path] = f
+        except OSError as e:
+            log.error("Cannot open %s: %s", path, e)
+            self._files.pop(path, None)
+
+    def _get_file(self, path: str):
+        """Возвращает файловый объект, открывая при необходимости."""
+        if path not in self._files:
+            self._open_at_end(path)
+        return self._files.get(path)
+
+    def _check_truncation(self, path: str, f) -> bool:
+        """Возвращает True и перематывает в начало, если файл усечён."""
+        try:
+            current_pos = f.tell()
+            file_size = os.path.getsize(path)
+            if current_pos > file_size:
+                if self.debug_mode:
+                    log.info("File truncated, rewinding: %s", path)
+                f.seek(0)
+                return True
+        except OSError:
+            pass
+        return False
+
+    def _process_file(self, path: str) -> None:
+        f = self._get_file(path)
+        if f is None:
+            return
+
+        self._check_truncation(path, f)
+
+        try:
+            for line in f:
+                for keyword in self.keywords:
+                    if keyword in line:
+                        words = line.split()
+                        message = ' '.join(words[:self.n])
+                        send_text_to_telegram(
+                            self.bot_id, self.chat_ids, message, self.debug_mode)
+                        if self.debug_mode:
+                            log.info("Keyword '%s' in: %s", keyword, line.rstrip())
+                        break  # не проверяем другие keywords для этой строки
+        except OSError as e:
+            log.error("Error reading %s: %s", path, e)
+            self._open_at_end(path)  # попробуем переоткрыть
+
+    # ── события watchdog ──
 
     def on_modified(self, event):
         if event.is_directory:
             return
+        path = str(Path(event.src_path).resolve())
+        if path not in self.watched:
+            return
         if self.debug_mode:
-            logging.info(f"File modified: {event.src_path}")
-        self.check_file(event.src_path)
+            log.info("Modified: %s", path)
+        self._process_file(path)
 
-    def check_file(self, file_path):
-        if file_path not in self.files:
-            self.files[file_path] = open(file_path, 'r')
-            self.files[file_path].seek(0, os.SEEK_END)  # Move to the end of the file
-            self.positions[file_path] = self.files[file_path].tell()
+    def on_moved(self, event):
+        """Обработка ротации логов (rename/move)."""
+        path = str(Path(event.src_path).resolve())
+        if path not in self.watched:
+            return
+        if self.debug_mode:
+            log.info("File moved/rotated: %s", path)
+        # Переоткрываем (новый файл появится при следующем on_modified)
+        self._open_at_end(path)
 
-        file = self.files[file_path]
-        file.seek(self.positions[file_path])
-        for line in file:
-            for keyword in self.keywords:
-                if keyword in line:
-                    words = line.split()
-                    message = ' '.join(words[:self.n])
-                    send_text_to_telegram(self.bot_id, self.chat_ids, message, self.debug_mode)
-                    if self.debug_mode:
-                        logging.info(f"Detected keyword '{keyword}' in line: {line.strip()}")
-                    break
-        self.positions[file_path] = file.tell()
+    def on_deleted(self, event):
+        path = str(Path(event.src_path).resolve())
+        if path not in self.watched:
+            return
+        if self.debug_mode:
+            log.info("File deleted: %s", path)
+        f = self._files.pop(path, None)
+        if f:
+            try:
+                f.close()
+            except OSError:
+                pass
 
-def read_config(config_path):
-    config = {}
-    with open(config_path, 'r') as f:
-        for line in f:
-            if '=' in line:
-                key, value = line.strip().split('=', 1)
+    def on_created(self, event):
+        """Файл пересоздан после удаления/ротации."""
+        path = str(Path(event.src_path).resolve())
+        if path not in self.watched:
+            return
+        if self.debug_mode:
+            log.info("File created: %s", path)
+        self._open_at_end(path)
+
+    def close_all(self):
+        """Явное закрытие всех дескрипторов при завершении."""
+        for f in self._files.values():
+            try:
+                f.close()
+            except OSError:
+                pass
+        self._files.clear()
+
+
+# ─── Конфиг ──────────────────────────────────────────────────────────────────
+
+def read_config(config_path: str) -> tuple:
+    required = {'filename', 'keyword', 'n', 'bot_id', 'chat_id', 'debug'}
+    config: dict[str, str] = {}
+
+    try:
+        with open(config_path, 'r') as f:
+            for lineno, line in enumerate(f, 1):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' not in line:
+                    log.warning("Config line %d skipped (no '='): %s", lineno, line)
+                    continue
+                key, _, value = line.partition('=')
                 config[key.strip()] = value.strip()
+    except OSError as e:
+        log.error("Cannot read config: %s", e)
+        sys.exit(1)
 
-    filenames = config['filename'].split(',')
-    keywords = config['keyword'].split(',')
-    n = int(config['n'])
-    bot_id = config['bot_id']
-    chat_ids = config['chat_id'].split(',')
-    debug = config['debug'].lower() == 'true'
-    return filenames, keywords, n, bot_id, chat_ids, debug
+    missing = required - config.keys()
+    if missing:
+        log.error("Config missing keys: %s", ', '.join(missing))
+        sys.exit(1)
 
-def create_default_config(config_path):
-    with open(config_path, 'w') as configfile:
-        configfile.write('filename=\n')
-        configfile.write('keyword=\n')
-        configfile.write('n=0\n')
-        configfile.write('bot_id=\n')
-        configfile.write('chat_id=\n')
-        configfile.write('debug=false\n')
+    try:
+        return (
+            [s for s in config['filename'].split(',') if s],
+            [s for s in config['keyword'].split(',') if s],
+            int(config['n']),
+            config['bot_id'],
+            [s for s in config['chat_id'].split(',') if s],
+            config['debug'].lower() == 'true',
+        )
+    except ValueError as e:
+        log.error("Invalid config value: %s", e)
+        sys.exit(1)
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(description='Monitor log files and send alerts to Telegram.')
-    parser.add_argument('--filename', type=str, help='Path to the log file(s), separated by commas')
-    parser.add_argument('--keyword', type=str, help='Keyword(s) to watch for in the log file, separated by commas')
-    parser.add_argument('--n', type=int, help='Number of words to include in the message')
-    parser.add_argument('--bot-id', type=str, help='Telegram Bot ID')
-    parser.add_argument('--chat-id', type=str, help='Telegram Chat IDs, separated by commas')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode (optional)')
+
+def create_default_config(config_path: str) -> None:
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    with open(config_path, 'w') as f:
+        f.write(
+            "filename=\nkeyword=\nn=0\n"
+            "bot_id=\nchat_id=\ndebug=false\n"
+        )
+    log.info("Default config created at %s — please fill it in.", config_path)
+
+
+# ─── CLI ─────────────────────────────────────────────────────────────────────
+
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description='Monitor log files and send alerts to Telegram.')
+    parser.add_argument('--filename', help='Log file(s), comma-separated')
+    parser.add_argument('--keyword',  help='Keyword(s), comma-separated')
+    parser.add_argument('--n',        type=int, help='Words to include in message')
+    parser.add_argument('--bot-id',   dest='bot_id', help='Telegram Bot ID')
+    parser.add_argument('--chat-id',  dest='chat_id', help='Chat ID(s), comma-separated')
+    parser.add_argument('--debug',    action='store_true', help='Enable debug mode')
     return parser.parse_args()
 
-def main():
-    home = os.path.expanduser("~")
-    config_path = os.path.join(home, '.config', 'tg_log.ini')
 
+# ─── main ─────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    config_path = os.path.join(os.path.expanduser("~"), '.config', 'tg_log.ini')
     args = parse_arguments()
 
-    if not any(vars(args).values()):
+    # Используем конфиг только если ни один аргумент не передан
+    use_config = not any([args.filename, args.keyword, args.n,
+                           args.bot_id, args.chat_id, args.debug])
+
+    if use_config:
         if not os.path.exists(config_path):
             create_default_config(config_path)
-            logging.error(f"Configuration file created at {config_path}. Please fill in the required parameters.")
             return
-
         filenames, keywords, n, bot_id, chat_ids, debug = read_config(config_path)
     else:
-        filenames = args.filename.split(',')
-        keywords = args.keyword.split(',')
-        n = args.n
-        bot_id = args.bot_id
-        chat_ids = args.chat_id.split(',')
-        debug = args.debug
+        # Проверяем что все обязательные аргументы переданы
+        missing = [name for name, val in [
+            ('--filename', args.filename), ('--keyword', args.keyword),
+            ('--n',        args.n),        ('--bot-id',  args.bot_id),
+            ('--chat-id',  args.chat_id),
+        ] if not val]
+        if missing:
+            log.error("Missing required arguments: %s", ', '.join(missing))
+            sys.exit(1)
 
-    if not filenames or not keywords or not n or not bot_id or not chat_ids:
-        logging.error("Missing arguments! Please provide all required arguments.")
-        return
+        filenames = [s for s in args.filename.split(',') if s]
+        keywords  = [s for s in args.keyword.split(',')  if s]
+        n         = args.n
+        bot_id    = args.bot_id
+        chat_ids  = [s for s in args.chat_id.split(',')  if s]
+        debug     = args.debug
 
-    event_handler = LogFileEventHandler(keywords, bot_id, chat_ids, n, debug)
+    if not filenames or not keywords or n <= 0 or not bot_id or not chat_ids:
+        log.error("Invalid arguments (check n > 0 and non-empty lists).")
+        sys.exit(1)
+
+    if debug:
+        log.setLevel(logging.DEBUG)
+        log.debug("filenames=%s keywords=%s n=%d bot_id=%s chat_ids=%s",
+                  filenames, keywords, n, bot_id, chat_ids)
+
+    # Проверяем существование файлов
+    for filename in filenames:
+        if not os.path.exists(filename):
+            log.warning("File does not exist yet, will watch directory: %s", filename)
+
+    # watchdog наблюдает за директориями, а handler фильтрует по именам файлов
+    event_handler = LogFileEventHandler(filenames, keywords, bot_id, chat_ids, n, debug)
     observer = Observer()
 
+    watched_dirs: set[str] = set()
     for filename in filenames:
-        observer.schedule(event_handler, path=filename, recursive=False)
+        directory = str(Path(filename).resolve().parent)
+        if directory not in watched_dirs:
+            observer.schedule(event_handler, path=directory, recursive=False)
+            watched_dirs.add(directory)
+            if debug:
+                log.debug("Watching directory: %s", directory)
 
     observer.start()
+    log.info("Monitoring started. Press Ctrl+C to stop.")
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
+        log.info("Stopping...")
+    finally:
         observer.stop()
-    observer.join()
+        observer.join()
+        event_handler.close_all()
+        log.info("Done.")
+
 
 if __name__ == "__main__":
     main()
